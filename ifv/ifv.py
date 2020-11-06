@@ -36,36 +36,18 @@ class IFV:
         """
         X_mat = np.vstack(X)
         # for i in range(self.n_vocabs):
-        idx = sample(range(len(X_mat)), int(2e5))
-        self.vocab = gmm = GaussianMixture(n_components=self.k, covariance_type="diag",
-                                           warm_start=True).fit(X_mat[idx])
+        gmm = GaussianMixture(n_components=self.k, covariance_type="diag", warm_start=True)
+
+        while not gmm.converged_:
+            idx = sample(range(len(X_mat)), int(2e5))
+            gmm.fit(X_mat[idx])
+
         self.weights = gmm.weights_
         self.means = gmm.means_
         self.covariances = gmm.covariances_
+        self.vocab = gmm
         self.database = self.transform(X)
         return self
-
-    def refit(self, X):
-        """Function to refit if GMM not converged
-
-        Parameters
-        ----------
-        X : list(array)
-            List of local image descriptors
-
-        Returns
-        -------
-        None
-            void-function
-        """
-        X_mat = np.vstack(X)
-        # for i in range(self.n_vocabs):
-        idx = sample(range(len(X_mat)), int(2e5))
-        self.vocab.fit(X_mat[idx])
-        self.weights = self.vocab.weights_
-        self.means = self.vocab.means_
-        self.covariances = self.vocab.covariances_
-        self.database = self.transform(X)
 
     def predict(self, x):
         """Predict the matching instance for x
