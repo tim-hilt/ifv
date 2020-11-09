@@ -12,9 +12,10 @@ import progressbar as pb
 
 
 class IFV:
-    def __init__(self, k=256, n_vocabs=1, alpha=0.5):
+    def __init__(self, k=256, n_vocabs=1, algorithm="statistics", alpha=0.5):
         self.k = k
         self.n_vocabs = 1
+        self.algorithm = algorithm
         self.alpha = alpha
         self.database = None
         self.vocab = None
@@ -37,6 +38,9 @@ class IFV:
         X_mat = np.vstack(X)
         # for i in range(self.n_vocabs):
         gmm = GaussianMixture(n_components=self.k, covariance_type="diag", warm_start=True)
+
+        idx = sample(range(len(X_mat)), int(2e5))
+        gmm.fit(X_mat[idx])
 
         while not gmm.converged_:
             idx = sample(range(len(X_mat)), int(2e5))
@@ -129,44 +133,37 @@ class IFV:
         -------
 
         """
-        # Vectorized version: probably buggy
-        # s0 = preds.sum(axis=0)
-        # s1 = np.einsum("ij,ik->jk", preds, x)
-        # s2 = np.einsum("ij,ik->jk", preds, x**2)
-        #
-        # g_alpha = (s0 - len(x) * self.weights) / np.sqrt(self.weights)
-        # g_mu = (s1 - self.means * s0[:, None]) / (np.sqrt(self.weights)[:, None] * self.covariances)
-        # g_sigma = (s2 - 2 * self.means * s1 + (self.means**2 - self.covariances**2) * s0[:, None]) / \
-        #           (np.sqrt(2 * self.weights[:, None]) * self.covariances**2)
-        #
-        # fv = np.concatenate((g_alpha, g_mu.flatten(), g_sigma.flatten()))
-
-        # Non-vectorized-version
         T, D = x.shape
-
-        s0 = np.zeros(self.k)
-        s1 = np.zeros((self.k, D))
-        s2 = np.zeros((self.k, D))
-
         ytk = self.vocab.predict_proba(x)
+        if self.algorithm == "statistics":
+            # Implementation based on "Image classification with the bwabwabwah..."
+            s0 = ytk.sum(axis=0)
+            s1 = ytk.T @ x
+            s2 = ytk.T @ x**2
 
-        for t in range(T):
+            G_alpha = (s0 - T * self.weights) / np.sqrt(self.weights)
+            G_mu = (s1 - self.means * s0[:, None]) / (np.sqrt(self.weights)[:, None] * self.covariances)
+            G_sigma = (s2 - 2 * self.means * s1 + (self.means**2 - self.covariances**2) * s0[:, None]) / \
+                      (np.sqrt(2 * self.weights[:, None]) * self.covariances**2)
+
+            fv = np.concatenate((G_alpha, G_mu.flatten(), G_sigma.flatten()))
+        elif self.algorithm == "original":
+            # Implementation based on "Improving the fisher kernel for large scalee image retrieval"
+            G_mu = np.zeros((self.k, D))
+            G_sigma = np.zeros((self.k, D))
+
             for k in range(self.k):
-                s0[k] += ytk[t, k]
-                s1[k] += ytk[t, k] * x[t]
-                s2[k] += ytk[t, k] * x[t]**2
+                for t in range(T):
+                    G_mu[k] += ytk[t, k] * ((x[t] - self.means[k]) / self.covariances[k])
+                    G_sigma[k] += ytk[t, k] * ((x[t] - self.means[k])**2 / self.covariances[k]**2 - 1)
 
-        G_alpha = np.zeros(self.k)
-        G_mu = np.zeros((self.k, D))
-        G_sigma = np.zeros((self.k, D))
+            G_mu /= (T * np.sqrt(self.weights[:, None]))
+            G_sigma /= (T * np.sqrt(self.weights[:, None]))
+            fv = np.concatenate((G_mu.flatten(), G_sigma.flatten()))
+        else:
+            print(f"Value for algorithm ({self.algorithm}) invalid. Change value and try again.")
+            return
 
-        for k in range(self.k):
-            G_alpha[k] = (s0[k] - T * self.weights[k]) / np.sqrt(self.weights[k])
-            G_mu[k] = (s1[k] - self.means[k] * s0[k]) / (np.sqrt(self.weights[k]) * self.covariances[k])
-            G_sigma[k] = (s2[k] - 2 * self.means[k] * s1[k] + (self.means[k]**2 - self.covariances[k]**2) * s0[k]) / \
-                         (np.sqrt(2 * self.weights[k]) * self.covariances[k])
-
-        fv = np.concatenate((G_alpha, G_mu.flatten(), G_sigma.flatten()))
         fv = self._power_law_norm(fv)
         fv /= norm(fv)
         return fv
